@@ -1,0 +1,22 @@
+﻿dia_semana,hora_inicio,hora_fim,turno,n_medicos
+Seg,00:00,08:00,Plantão Noturno,2
+Seg,08:00,16:00,Plantão Diurno,4
+Seg,16:00,00:00,Plantão Vespertino,3
+Ter,00:00,08:00,Plantão Noturno,2
+Ter,08:00,16:00,Plantão Diurno,4
+Ter,16:00,00:00,Plantão Vespertino,3
+Qua,00:00,08:00,Plantão Noturno,2
+Qua,08:00,16:00,Plantão Diurno,3
+Qua,16:00,00:00,Plantão Vespertino,3
+Qui,00:00,08:00,Plantão Noturno,2
+Qui,08:00,16:00,Plantão Diurno,4
+Qui,16:00,00:00,Plantão Vespertino,3
+Sex,00:00,08:00,Plantão Noturno,2
+Sex,08:00,16:00,Plantão Diurno,4
+Sex,16:00,00:00,Plantão Vespertino,4
+Sáb,00:00,08:00,Plantão Noturno,1
+Sáb,08:00,16:00,Plantão Diurno,3
+Sáb,16:00,00:00,Plantão Vespertino,2
+Dom,00:00,08:00,Plantão Noturno,1
+Dom,08:00,16:00,Plantão Diurno,3
+Dom,16:00,00:00,Plantão Vespertino,2
