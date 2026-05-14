@@ -1,22 +1,5 @@
-﻿dia_semana,hora_inicio,hora_fim,turno,n_medicos
-Seg,00:00,08:00,Plantão Noturno,2
-Seg,08:00,16:00,Plantão Diurno,4
-Seg,16:00,00:00,Plantão Vespertino,3
-Ter,00:00,08:00,Plantão Noturno,2
-Ter,08:00,16:00,Plantão Diurno,4
-Ter,16:00,00:00,Plantão Vespertino,3
-Qua,00:00,08:00,Plantão Noturno,2
-Qua,08:00,16:00,Plantão Diurno,3
-Qua,16:00,00:00,Plantão Vespertino,3
-Qui,00:00,08:00,Plantão Noturno,2
-Qui,08:00,16:00,Plantão Diurno,4
-Qui,16:00,00:00,Plantão Vespertino,3
-Sex,00:00,08:00,Plantão Noturno,2
-Sex,08:00,16:00,Plantão Diurno,4
-Sex,16:00,00:00,Plantão Vespertino,4
-Sáb,00:00,08:00,Plantão Noturno,1
-Sáb,08:00,16:00,Plantão Diurno,3
-Sáb,16:00,00:00,Plantão Vespertino,2
-Dom,00:00,08:00,Plantão Noturno,1
-Dom,08:00,16:00,Plantão Diurno,3
-Dom,16:00,00:00,Plantão Vespertino,2
+turno,n_medicos_pa,n_enfermeiros,n_tecnicos,salas_atend,lambda_turno,pac_medico_turno
+Noturno-1 (00h-07h),2,3,4,3,9.2,4.6
+Matutino  (07h-13h),5,6,8,6,40.5,8.1
+Vespertino(13h-19h),4,5,7,5,46.4,11.6
+Noturno-2 (19h-00h),3,4,5,4,27.0,9.0

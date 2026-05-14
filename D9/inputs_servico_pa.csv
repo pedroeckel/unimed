@@ -1,6 +1,6 @@
-﻿risco_manchester,media_atend_min,dp_atend_min,media_espera_min,proporcao,proporcao_pct
-Vermelho,20.8,5.9,2.4,161,5.2
-Laranja,32.8,11.7,7.9,472,15.4
-Amarelo,37.3,12.4,23.6,1150,37.5
-Verde,26.1,10.2,43.3,966,31.5
-Azul,17.3,5.7,62.3,318,10.4
+risco_manchester,n_atendimentos,media_min,mediana_min,desvio_min,mu_lognormal,sigma_lognormal,P10_min,P90_min
+Vermelho,179,21.2,20.5,6.0,3.014,0.278,14.4,29.8
+Laranja,448,36.3,33.6,16.5,3.51,0.396,20.3,54.8
+Amarelo,949,75.1,67.9,38.4,4.193,0.51,34.0,129.2
+Verde,1022,120.4,115.2,53.3,4.68,0.494,53.1,198.2
+Azul,291,47.4,41.6,20.7,3.769,0.423,24.9,77.6
