@@ -4,15 +4,15 @@
 > **Instituição:** UNIMED SP  
 > **Disciplina:** Simulação em Serviços de Saúde  
 > **Professor:** Prof. Dr. Pedro (Mestrado e Doutorado em Simulação)  
-> **Módulo:** D9 — Integração com Sistemas Corporativos (ERP, HIS)
+> **Módulos:** D9 — Integração com Sistemas Corporativos (ERP, HIS) · D10 — SimPy aplicado à saúde
 
 ---
 
 ## Visão Geral
 
-Este repositório contém o **material prático** da aula D9, que demonstra como extrair, limpar e transformar dados reais de sistemas hospitalares (HIS via HL7 FHIR R4 e ERP) em **inputs prontos para modelos de simulação de eventos discretos (DES)**.
+Este repositório contém o **material prático** das aulas **D9 e D10**. A D9 mostra como extrair, limpar e transformar dados hospitalares em **inputs prontos para simulação**. A D10 usa esses insumos para apresentar, de forma didática, os principais conceitos de **SimPy** com exemplos hospitalares em notebooks Jupyter.
 
-O pipeline percorre sete etapas — da conexão à API FHIR até a exportação dos parâmetros calibrados em CSV —, cobrindo os principais conceitos de integração de dados em saúde: interoperabilidade, qualidade de dados, KPIs operacionais e conformidade com a LGPD.
+O pipeline percorre sete etapas — da conexão à API FHIR até a exportação dos parâmetros calibrados em CSV — e depois conecta esses dados à camada de modelagem em SimPy. O material cobre interoperabilidade, qualidade de dados, KPIs operacionais, fundamentos de DES e conformidade com a LGPD.
 
 ```
 HIS (HL7 FHIR R4)         ERP (SQL / batch)
@@ -31,7 +31,7 @@ HIS (HL7 FHIR R4)         ERP (SQL / batch)
           λ por hora · μ por risco
                    │
                    ▼
-          inputs_*.csv  ──▶  Modelo SimPy (D10)
+          inputs_*.csv  ──▶  Notebooks didáticos de SimPy (D10)
 ```
 
 ---
@@ -41,19 +41,28 @@ HIS (HL7 FHIR R4)         ERP (SQL / batch)
 ```
 code/
 ├── README.md                          ← este arquivo
-└── D9/
-    ├── D9_Pratica_Integracao_ERP_HIS.ipynb   ← notebook principal (33 células)
-    │
-    ├── inputs_chegada_pa.csv          ← taxa λ de chegada por faixa horária
-    ├── inputs_servico_pa.csv          ← parâmetros μ e σ por nível Manchester
-    ├── inputs_escala_erp.csv          ← escala de médicos por turno (ERP)
-    ├── inputs_leitos_erp.csv          ← taxa de ocupação de leitos por ala
-    │
-    ├── fig1_outliers.png              ← histograma antes × depois da limpeza
-    ├── fig2_taxa_chegada.png          ← taxa de chegada λ por hora do dia
-    ├── fig3_volume_dia.png            ← volume de atendimentos por dia da semana
-    ├── fig4_espera_risco.png          ← tempo de espera por nível Manchester
-    └── fig5_heatmap.png               ← heatmap hora × dia da semana
+├── D9/
+│   ├── D9_Pratica_Integracao_ERP_HIS.ipynb   ← notebook principal da D9
+│   ├── inputs_chegada_pa.csv          ← taxa λ de chegada por faixa horária
+│   ├── inputs_servico_pa.csv          ← parâmetros μ e σ por nível Manchester
+│   ├── inputs_escala_erp.csv          ← escala de médicos por turno (ERP)
+│   ├── inputs_leitos_erp.csv          ← taxa de ocupação de leitos por ala
+│   ├── fig1_outliers.png              ← histograma antes × depois da limpeza
+│   ├── fig2_taxa_chegada.png          ← taxa de chegada λ por hora do dia
+│   ├── fig3_volume_dia.png            ← volume de atendimentos por dia da semana
+│   ├── fig4_espera_risco.png          ← tempo de espera por nível Manchester
+│   └── fig5_heatmap.png               ← heatmap hora × dia da semana
+└── D10/
+    ├── D10_GemeDigital_PontaAPonta.ipynb      ← notebook principal de gêmeo digital
+    └── simpy_exemplos/
+        ├── 00_fundamentos_simpy.ipynb
+        ├── 01_triagem_classificacao_risco.ipynb
+        ├── 02_leitos_uti_timeout.ipynb
+        ├── 03_fluxo_cadastro_alta.ipynb
+        ├── 04_escala_enfermagem_container.ipynb
+        ├── 05_despacho_ambulancias_filterstore.ipynb
+        ├── README.md                   ← guia da trilha didática
+        └── ex*.py                      ← versões script de apoio
 ```
 
 ---
@@ -179,13 +188,14 @@ limite_superior = Q3 + 1.5 * IQR
 ### Dependências
 
 ```bash
-pip install requests pandas numpy matplotlib seaborn scipy
+pip install requests pandas numpy matplotlib seaborn scipy simpy ipykernel
 ```
 
 Ou com conda:
 
 ```bash
 conda install requests pandas numpy matplotlib seaborn scipy
+pip install simpy ipykernel
 ```
 
 ### Executar o notebook
@@ -196,6 +206,42 @@ jupyter notebook D9_Pratica_Integracao_ERP_HIS.ipynb
 ```
 
 Execute as células em ordem, de cima para baixo. O tempo total de execução é de aproximadamente **30 segundos** (modo offline) a **2 minutos** (com conexão ao servidor FHIR).
+
+---
+
+## Material D10 — SimPy em Jupyter
+
+A D10 agora está organizada em uma **trilha de notebooks didáticos** dentro de [D10/simpy_exemplos](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos>), pensada para apresentação em aula e progressão conceitual.
+
+### Ordem sugerida
+
+1. [00_fundamentos_simpy.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos/00_fundamentos_simpy.ipynb>)
+2. [01_triagem_classificacao_risco.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos/01_triagem_classificacao_risco.ipynb>)
+3. [02_leitos_uti_timeout.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos/02_leitos_uti_timeout.ipynb>)
+4. [03_fluxo_cadastro_alta.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos/03_fluxo_cadastro_alta.ipynb>)
+5. [04_escala_enfermagem_container.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos/04_escala_enfermagem_container.ipynb>)
+6. [05_despacho_ambulancias_filterstore.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos/05_despacho_ambulancias_filterstore.ipynb>)
+
+### O que essa trilha cobre
+
+- fundamentos de `Environment`, `Process`, `Event` e `timeout`;
+- uso de `Resource` e `PriorityResource` em filas clínicas;
+- uso de `Store` para leitos nomeados;
+- uso de `Container` para capacidade agregada;
+- uso de `FilterStore` para seleção de objetos compatíveis;
+- interpretação de saída, erros comuns, exercícios e extensões.
+
+### Como executar os notebooks da D10
+
+Use o ambiente virtual do projeto para garantir que `simpy==4.1.1` esteja disponível:
+
+```bash
+cd "D10/simpy_exemplos"
+../../.venv/bin/python -m ipykernel install --user --name sim-saude --display-name "Python (sim-saude)"
+jupyter notebook
+```
+
+Depois, abra os notebooks na ordem sugerida. Os arquivos `.py` da mesma pasta ficam como **material de apoio**, úteis para execução rápida fora do Jupyter ou comparação entre versão script e versão notebook.
 
 ---
 
@@ -210,7 +256,7 @@ Execute as células em ordem, de cima para baixo. O tempo total de execução é
 | NumPy | ≥ 1.23 | Geração de números aleatórios e cálculos |
 | SciPy | ≥ 1.9 | Ajuste de distribuições (Lognormal) |
 | Matplotlib / Seaborn | latest | Visualizações (5 figuras) |
-| SimPy | ≥ 4.0 | Motor de simulação DES (próxima aula — D10) |
+| SimPy | 4.1.1 | Motor de simulação DES usado na trilha didática da D10 |
 | LGPD | Lei 13.709/2018 | Conformidade no tratamento de dados de saúde |
 | Protocolo Manchester | — | Sistema de triagem e classificação de risco |
 
@@ -224,12 +270,12 @@ Para uso com dados reais de produção, consulte a Seção 8.6 da apostila D9 (G
 
 ---
 
-## Próximos Passos — Aula D10
+## Conexão D9 → D10
 
-Os quatro arquivos CSV gerados por este notebook são os **inputs diretos** do modelo SimPy que será construído na aula D10:
+Os quatro arquivos CSV gerados na D9 são os **inputs diretos** dos exemplos e modelos da D10:
 
 ```python
-# Exemplo de uso no modelo SimPy (D10)
+# Exemplo de uso no material da D10
 import simpy, pandas as pd, numpy as np
 
 chegadas   = pd.read_csv("inputs_chegada_pa.csv")
@@ -244,6 +290,11 @@ lambda_hora = chegadas.loc[chegadas.faixa_horaria == "06h–12h", "lambda_hora"]
 mu_amarelo    = servico.loc[servico.risco_manchester == "Amarelo", "media_atend_min"].values[0]
 sigma_amarelo = servico.loc[servico.risco_manchester == "Amarelo", "dp_atend_min"].values[0]
 ```
+
+Na prática didática, a D10 está dividida em dois níveis:
+
+- a trilha [D10/simpy_exemplos](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos>) para ensinar os conceitos fundamentais do SimPy;
+- o notebook [D10_GemeDigital_PontaAPonta.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/D10_GemeDigital_PontaAPonta.ipynb>) para mostrar a integração ponta a ponta em um gêmeo digital mais completo.
 
 ---
 
