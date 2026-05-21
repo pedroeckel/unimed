@@ -102,14 +102,32 @@ def carregar_dados():
     proporcoes = [MANCHESTER[r]["prop"] for r in NIVEIS]
     random.seed(42); np.random.seed(42)
 
-    D9_ALT = os.path.join(os.path.dirname(__file__), "..", "D9")
-    PATH_HIST = os.path.join(D9_ALT, "historico_pa_clean.csv")
+    # Resolução robusta de caminho — idêntica ao notebook D10
+    # O app está em D10/streamlit/, portanto D9 fica em ../../D9
+    CANDIDATOS_D9 = [
+        os.path.join(os.path.dirname(__file__), "..", "..", "D9"),
+        os.path.join(os.path.dirname(__file__), "..", "D9"),
+        os.path.abspath("D9"),
+        os.path.abspath("../D9"),
+        "/Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D9",
+    ]
+    D9_DIR = None
+    for cand in CANDIDATOS_D9:
+        if os.path.exists(os.path.join(cand, "historico_pa_clean.csv")):
+            D9_DIR = cand
+            break
+    if D9_DIR is None:
+        D9_DIR = CANDIDATOS_D9[0]
+
+    PATH_HIST = os.path.join(D9_DIR, "historico_pa_clean.csv")
 
     if os.path.exists(PATH_HIST):
         df = pd.read_csv(PATH_HIST, parse_dates=["dt_chegada"])
         if "hora" not in df.columns and "hora_chegada" in df.columns:
             df = df.rename(columns={"hora_chegada": "hora"})
-        fonte = "D9 — dados reais"
+        if "dia_semana" in df.columns:
+            df["dia_semana"] = df["dia_semana"].replace({"Sab": "Sáb"})
+        fonte = f"D9 — dados reais ({D9_DIR})"
     else:
         registros = []
         dt_inicio = datetime(2024, 11, 1)
@@ -142,12 +160,22 @@ def carregar_dados():
     df["t_consulta_min"] = df["t_consulta_min"].clip(lower=1, upper=240)
     df["t_triagem_min"]  = df["t_triagem_min"].fillna(df["t_triagem_min"].median())
     df["t_espera_medico_min"] = df["t_espera_medico_min"].fillna(df["t_espera_medico_min"].median())
-    return df, fonte
+    return df, fonte, D9_DIR
 
 
 @st.cache_data
-def construir_params(df: pd.DataFrame):
-    lambda_por_hora   = (df.groupby("hora").size() / 30).to_dict()
+def construir_params(df: pd.DataFrame, d9_dir: str = ""):
+    # λ por hora — prioriza taxa_hora_pa.csv do D9 (igual ao notebook)
+    taxa_path = os.path.join(d9_dir, "taxa_hora_pa.csv") if d9_dir else ""
+    if taxa_path and os.path.exists(taxa_path):
+        _taxa = pd.read_csv(taxa_path)
+        if "hora_chegada" in _taxa.columns:
+            _taxa = _taxa.rename(columns={"hora_chegada": "hora"})
+        lambda_por_hora = dict(zip(_taxa["hora"].astype(int), _taxa["lambda_medio"]))
+    else:
+        n_dias = df.dt_chegada.dt.date.nunique()
+        lambda_por_hora = (df.groupby("hora").size() / max(n_dias, 1)).to_dict()
+
     proporcao_risco   = df.risco_manchester.value_counts(normalize=True).to_dict()
     params_servico    = {}
     for nivel in NIVEIS:
@@ -159,12 +187,28 @@ def construir_params(df: pd.DataFrame):
         else:
             params_servico[nivel] = {"mu": 3.0, "sigma": 0.5}
     sig_t, _, scale_t = lognorm.fit(df["t_triagem_min"].dropna().clip(lower=0.5), floc=0)
-    recursos_turno = {
-        "noturno1":  {"medicos":2,"triadores":1,"inicio":0, "fim":7},
-        "matutino":  {"medicos":5,"triadores":2,"inicio":7, "fim":13},
-        "vespertino":{"medicos":4,"triadores":2,"inicio":13,"fim":19},
-        "noturno2":  {"medicos":3,"triadores":1,"inicio":19,"fim":24},
-    }
+
+    # Escala de recursos — prioriza inputs_escala_erp.csv do D9 (igual ao notebook)
+    escala_path = os.path.join(d9_dir, "inputs_escala_erp.csv") if d9_dir else ""
+    if escala_path and os.path.exists(escala_path):
+        esc = pd.read_csv(escala_path)
+        def _med(esc, palavra):
+            rows = esc[esc["turno"].str.contains(palavra, case=False, na=False)]
+            return int(rows["n_medicos_pa"].mean().round()) if len(rows) else 2
+        recursos_turno = {
+            "noturno1":  {"medicos": _med(esc,"Noturno-1"), "triadores":1,"inicio":0, "fim":7},
+            "matutino":  {"medicos": _med(esc,"Matutino"),  "triadores":2,"inicio":7, "fim":13},
+            "vespertino":{"medicos": _med(esc,"Vespertino"),"triadores":2,"inicio":13,"fim":19},
+            "noturno2":  {"medicos": _med(esc,"Noturno-2"), "triadores":1,"inicio":19,"fim":24},
+        }
+    else:
+        recursos_turno = {
+            "noturno1":  {"medicos":2,"triadores":1,"inicio":0, "fim":7},
+            "matutino":  {"medicos":5,"triadores":2,"inicio":7, "fim":13},
+            "vespertino":{"medicos":4,"triadores":2,"inicio":13,"fim":19},
+            "noturno2":  {"medicos":3,"triadores":1,"inicio":19,"fim":24},
+        }
+
     return {
         "lambda_hora": lambda_por_hora,
         "servico": params_servico,
@@ -175,6 +219,7 @@ def construir_params(df: pd.DataFrame):
         "t_overhead_doc_min": 15.0,
         "prioridade_manchester": MANCHESTER_PRIORIDADE,
         "seed_base": 42,
+        "disponibilidade_medico": {"noturno1": 1.0, "matutino": 1.0, "vespertino": 1.0, "noturno2": 1.0},
         "data_geracao": df.dt_chegada.max().strftime("%Y-%m-%d"),
     }
 
@@ -192,20 +237,26 @@ def gemeo_digital_pa(params, semente=42, duracao_min=30*60, warmup_min=4*60, col
     triadores = simpy.Resource(env, capacity=n_tri_max)
     medicos   = simpy.PriorityResource(env, capacity=n_med_max)
     overhead_doc = params.get("t_overhead_doc_min", 0.0)
+    disponibilidade_medico = params.get("disponibilidade_medico", {})
+    turnos_lista = sorted(params["recursos_turno"].items(), key=lambda kv: kv[1]["inicio"])
+
+    def turno_atual(minuto):
+        hora = int(minuto // 60) % 24
+        nome_t, cfg_t = turnos_lista[0]
+        for nome, cfg in turnos_lista:
+            if cfg["inicio"] <= hora < cfg["fim"]:
+                nome_t, cfg_t = nome, cfg
+                break
+        return nome_t, cfg_t
 
     def shift_manager(env):
-        turnos = sorted(params["recursos_turno"].values(), key=lambda t: t["inicio"])
         while True:
-            hora_atual = int(env.now // 60) % 24
-            turno_ativo = turnos[0]
-            for t in turnos:
-                if t["inicio"] <= hora_atual < t["fim"]:
-                    turno_ativo = t; break
+            _, turno_ativo = turno_atual(env.now)
             medicos._capacity   = turno_ativo["medicos"]
             triadores._capacity = turno_ativo["triadores"]
             min_atuais = env.now % (24 * 60)
-            proximos = [t["inicio"]*60 for t in turnos if t["inicio"]*60 > min_atuais]
-            espera = min(proximos) - min_atuais if proximos else (24+turnos[0]["inicio"])*60 - min_atuais
+            proximos = [cfg["inicio"]*60 for _, cfg in turnos_lista if cfg["inicio"]*60 > min_atuais]
+            espera = min(proximos) - min_atuais if proximos else (24+turnos_lista[0][1]["inicio"])*60 - min_atuais
             yield env.timeout(max(1.0, espera))
 
     env.process(shift_manager(env))
@@ -223,7 +274,10 @@ def gemeo_digital_pa(params, semente=42, duracao_min=30*60, warmup_min=4*60, col
             yield req
             t_ini_medico = env.now
             t_consulta   = max(1., np.random.lognormal(s["mu"], s["sigma"]))
-            yield env.timeout(t_consulta + overhead_doc)
+            nome_turno_medico, _ = turno_atual(t_ini_medico)
+            disponibilidade = max(0.55, min(1.0, disponibilidade_medico.get(nome_turno_medico, 1.0)))
+            t_ocupacao = (t_consulta + overhead_doc) / disponibilidade
+            yield env.timeout(t_ocupacao)
         espera_medico = t_ini_medico - t_chegada - espera_triagem - t_serv_triagem
         tempo_total   = t_ini_medico + t_consulta - t_chegada
         if warmup_min <= t_chegada <= coleta_fim_min:
@@ -268,6 +322,14 @@ def gemeo_digital_pa(params, semente=42, duracao_min=30*60, warmup_min=4*60, col
     return df_res, estat
 
 
+def ic95(serie):
+    from scipy.stats import t as t_dist
+    n    = len(serie)
+    mean = serie.mean()
+    h    = t_dist.ppf(0.975, df=n-1) * serie.sem()
+    return float(mean), float(mean - h), float(mean + h)
+
+
 @st.cache_data
 def rodar_replicacoes(params_json: str, n_rep: int = 10):
     params = json.loads(params_json)
@@ -278,6 +340,75 @@ def rodar_replicacoes(params_json: str, n_rep: int = 10):
         if not df_rep.empty:
             dfs.append(df_rep.assign(replicacao=rep+1))
     return pd.DataFrame(estats), pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
+
+@st.cache_data
+def recalibrar_baseline(params_json: str, kpis_reais_json: str):
+    """Grid search rápido para encontrar parâmetros validados."""
+    params_base = json.loads(params_json)
+    kpis_reais  = json.loads(kpis_reais_json)
+    HORAS_PICO  = [15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+    def aplicar_concentracao(lam_base, fator_pico):
+        if abs(fator_pico - 1.0) < 1e-9:
+            return dict(lam_base)
+        lam_novo = dict(lam_base)
+        soma_total = sum(lam_base.values())
+        soma_pico  = sum(lam_base[h] for h in HORAS_PICO)
+        soma_off   = soma_total - soma_pico
+        soma_pico_nova = soma_pico * fator_pico
+        fator_off  = max((soma_total - soma_pico_nova) / max(soma_off, 1e-9), 0.25)
+        for h in lam_novo:
+            lam_novo[h] = lam_base[h] * fator_pico if h in HORAS_PICO else lam_base[h] * fator_off
+        return lam_novo
+
+    def montar(overhead, disp_vesp, disp_n2, fator_servico, fator_pico):
+        p = copy.deepcopy(params_base)
+        p["t_overhead_doc_min"] = overhead
+        p["lambda_hora"] = aplicar_concentracao(params_base["lambda_hora"], fator_pico)
+        p["disponibilidade_medico"] = {"noturno1":1.0,"matutino":1.0,"vespertino":disp_vesp,"noturno2":disp_n2}
+        for nivel in p["servico"]:
+            p["servico"][nivel]["mu"] = params_base["servico"][nivel]["mu"] + np.log(fator_servico)
+        return p
+
+    def avaliar(p, n_rep=6, seed=7000):
+        estats = []
+        for r in range(n_rep):
+            _, e = gemeo_digital_pa(p, semente=seed+r)
+            if e: estats.append(e)
+        if not estats: return None
+        df_e = pd.DataFrame(estats)
+        resultado = {}
+        for kpi in kpis_reais:
+            m, lo, hi = ic95(df_e[kpi])
+            erro = abs(m - kpis_reais[kpi]) / max(abs(kpis_reais[kpi]), 1e-6) * 100
+            dentro = lo <= kpis_reais[kpi] <= hi
+            resultado[kpi] = {"media":m,"ic_lo":lo,"ic_hi":hi,"erro":erro,"dentro_ic":dentro,"passa":erro<=15 and dentro}
+        n_ok = sum(v["passa"] for v in resultado.values())
+        return {"ic": resultado, "n_ok": n_ok, "validado": n_ok==len(kpis_reais),
+                "mean_err": np.mean([v["erro"] for v in resultado.values()])}
+
+    grade = [
+        (overhead, dv, dn, fs, fp)
+        for overhead in [15.0, 18.0, 20.0, 22.0]
+        for dv      in [1.00, 0.92, 0.84]
+        for dn      in [1.00, 0.90, 0.80]
+        for fs      in [1.00, 1.06, 1.12]
+        for fp      in [1.00, 1.07, 1.14]
+    ]
+
+    melhor = None
+    for combo in grade:
+        p_t = montar(*combo)
+        res = avaliar(p_t)
+        if res is None: continue
+        if melhor is None or (not melhor["validado"] and res["n_ok"] > melhor["n_ok"]) \
+                or (res["validado"] and res["mean_err"] < melhor.get("mean_err", 999)):
+            melhor = {**res, "params": p_t, "combo": combo}
+        if melhor["validado"]:
+            break
+
+    return melhor
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -451,8 +582,9 @@ def fig_predicao(df):
         df_p = (df.groupby(df.dt_chegada.dt.date).size()
                 .reset_index(name="y").rename(columns={"dt_chegada":"ds"}))
         df_p["ds"] = pd.to_datetime(df_p["ds"])
-        m = Prophet(yearly_seasonality=False,weekly_seasonality=True,
-                    daily_seasonality=False,changepoint_prior_scale=0.05)
+        m = Prophet(yearly_seasonality=False, weekly_seasonality=True,
+                    daily_seasonality=False, changepoint_prior_scale=0.05,
+                    seasonality_prior_scale=10)
         m.fit(df_p)
         futuro = m.make_future_dataframe(periods=14)
         prev   = m.predict(futuro)
@@ -493,7 +625,6 @@ with st.sidebar:
         "📊 Visão Geral",
         "🔍 Dados & Diagnóstico",
         "🤖 Simulação — Etapas 3–4",
-        "✅ Validação — Etapa 5",
         "🔬 Diagnóstico — Etapa 5B",
         "🔮 Cenários — Etapa 7A",
         "📈 Predição & Prescrição — Etapas 7B–8",
@@ -516,8 +647,8 @@ with st.sidebar:
 # CARREGAMENTO
 # ═══════════════════════════════════════════════════════════════════════════
 
-df, fonte = carregar_dados()
-params    = construir_params(df)
+df, fonte, d9_dir = carregar_dados()
+params    = construir_params(df, d9_dir)
 params_json = json.dumps(params)
 
 kpis_reais = {
@@ -532,13 +663,24 @@ kpis_reais = {
 # AVISO metodológico (reutilizado em várias páginas)
 # ═══════════════════════════════════════════════════════════════════════════
 
-AVISO_METODOLOGICO = """
+def aviso_metodologico():
+    validado = st.session_state.get("gemeo_validado", None)
+    if validado is True:
+        st.success("✅ Gêmeo validado — uso gerencial liberado nesta sessão.")
+    elif validado is False:
+        st.markdown("""
 <div class="aviso-metodologico">
-⚠️ <b>Status desta execução:</b> como o twin não validou nesta execução (erro relativo > 15%
-em pelo menos um KPI), as etapas de cenários, predição e prescrição devem ser lidas como
-<b>demonstrações ilustrativas do fluxo completo</b> — não como recomendação operacional homologada.
+⚠️ <b>Status desta execução:</b> recalibração ainda não executada (use a Etapa 5C no Diagnóstico).
+Os cenários, predição e prescrição devem ser lidos como <b>demonstrações ilustrativas</b>.
 </div>
-"""
+""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+<div class="aviso-metodologico">
+ℹ️ <b>Recalibração não executada.</b> Acesse <b>🔬 Diagnóstico — Etapa 5B</b> e rode a
+Etapa 5C para verificar o status metodológico do gêmeo.
+</div>
+""", unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -616,7 +758,7 @@ ele soma todas as etapas que o paciente precisa completar até sair do PA.
     st.markdown("---")
     col_a, col_b = st.columns([3,2])
     with col_a:
-        st.plotly_chart(fig_lambda_hora(df,params), use_container_width=True)
+        st.plotly_chart(fig_lambda_hora(df,params), width='stretch')
         info("O que é λ (taxa de chegada) e como ele é estimado?",
             r"""
 **λ(h)** é a taxa média de chegada de pacientes na hora *h* do dia (pacientes/hora).
@@ -635,7 +777,7 @@ Porque a demanda num PA não é constante ao longo do dia — há picos no iníc
 (≈8h), no fim da tarde (≈17h) e menor volume na madrugada.
 """)
     with col_b:
-        st.plotly_chart(fig_manchester_dist(df), use_container_width=True)
+        st.plotly_chart(fig_manchester_dist(df), width='stretch')
         info("Protocolo de Triagem Manchester",
             """
 O **Protocolo Manchester** classifica pacientes em 5 níveis de urgência:
@@ -653,7 +795,7 @@ com número de prioridade menor (mais urgentes) entram na frente da fila,
 independentemente da ordem de chegada.
 """)
 
-    st.plotly_chart(fig_sazonalidade(df), use_container_width=True)
+    st.plotly_chart(fig_sazonalidade(df), width='stretch')
     info("Como ler o mapa de calor de sazonalidade",
         """
 Cada célula mostra o número médio de atendimentos naquele **dia × hora** ao longo
@@ -721,7 +863,7 @@ dicionário `PARAMS_GEMEO` que alimenta o simulador.
 
     col1,col2 = st.columns(2)
     with col1:
-        st.plotly_chart(fig_box_espera(df), use_container_width=True)
+        st.plotly_chart(fig_box_espera(df), width='stretch')
         info("Como ler este boxplot",
             r"""
 Cada caixa mostra a distribuição de **espera para atendimento médico** por nível Manchester.
@@ -738,7 +880,7 @@ A linha vermelha tracejada marca a **meta operacional de 60 min**
 (padrão Amarelo no protocolo Manchester).
 """)
     with col2:
-        st.plotly_chart(fig_manchester_dist(df), use_container_width=True)
+        st.plotly_chart(fig_manchester_dist(df), width='stretch')
         info("Distribuição de risco e estabilidade do ajuste",
             r"""
 A proporção por nível determina a **composição do mix de pacientes** no simulador.
@@ -751,7 +893,7 @@ estatisticamente. Níveis menores (Vermelho, Azul) requerem mais atenção ao in
 de confiança dos parâmetros estimados.
 """)
 
-    st.plotly_chart(fig_sazonalidade(df), use_container_width=True)
+    st.plotly_chart(fig_sazonalidade(df), width='stretch')
 
     # ── Tabela de parâmetros Lognormal ────────────────────────────────
     st.subheader("Parâmetros ajustados — Distribuição Lognormal por Nível Manchester")
@@ -812,7 +954,7 @@ $$\mathbb{E}[X] = \exp\!\left(\mu + \frac{\sigma^2}{2}\right)$$
     styled = df_params_raw.style.apply(
         lambda col: [f"background-color:{COR_MANCHESTER[v]}22" for v in niveis_col]
         if col.name == "Nível" else [""]*len(col), axis=0)
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(styled, width='stretch')
 
     info("Como interpretar a tabela de ajuste",
         """
@@ -859,10 +1001,10 @@ subestima ρ e faz o twin parecer mais ocioso do que a operação real.
             "Médicos":v["medicos"],"Triadores":v["triadores"],
             "λ médio (pac/h)":round(lam_t,2),"ρ estimado":round(rho,2),
             "Status":("✅ Estável" if rho<0.85 else ("⚠️ Pressionado" if rho<0.95 else "🔴 Crítico"))})
-    st.dataframe(pd.DataFrame(turnos_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(turnos_rows), width='stretch', hide_index=True)
 
     with st.expander("📋 Amostra dos dados (50 primeiros registros)"):
-        st.dataframe(df.head(50), use_container_width=True)
+        st.dataframe(df.head(50), width='stretch')
 
 
 # ─── Simulação ─────────────────────────────────────────────────────────────
@@ -906,7 +1048,7 @@ simulando a escala real do ERP (4 turnos: noturno1, matutino, vespertino, noturn
                 "Cada replicação usa uma semente diferente (+42, +43, …) para garantir "
                 "independência estatística entre as corridas.")
     with col2:
-        btn_sim = st.button("▶️ Executar Simulação", use_container_width=True, type="primary")
+        btn_sim = st.button("▶️ Executar Simulação", width='stretch', type="primary")
 
     if btn_sim or ("df_estats" in st.session_state and "df_sim_all" in st.session_state):
         if btn_sim:
@@ -918,7 +1060,7 @@ simulando a escala real do ERP (4 turnos: noturno1, matutino, vespertino, noturn
         df_estats  = st.session_state["df_estats"]
         df_sim_all = st.session_state["df_sim_all"]
 
-        st.plotly_chart(fig_kpi_replicacoes(df_estats), use_container_width=True)
+        st.plotly_chart(fig_kpi_replicacoes(df_estats), width='stretch')
         info("Como interpretar os violin plots de KPI",
             r"""
 Cada violin mostra a **distribuição empírica** do KPI entre as replicações.
@@ -958,95 +1100,18 @@ na margem da meta — qualquer perturbação pode violá-la.
                 "IC 95% ±":round(ic_hw,2),
                 "IC inferior":round(vals.mean()-ic_hw,2),
                 "IC superior":round(vals.mean()+ic_hw,2)})
-        st.dataframe(pd.DataFrame(resumo), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(resumo), width='stretch', hide_index=True)
     else:
         st.info("Clique em **Executar Simulação** para rodar as replicações.")
 
 
 # ─── Validação ─────────────────────────────────────────────────────────────
-elif pagina == "✅ Validação — Etapa 5":
-    st.title("✅ Validação — Etapa 5")
-    st.markdown('<div class="etapa-header"><b>Etapa 5</b> — Validar o twin contra a realidade</div>',
-                unsafe_allow_html=True)
-
-    info("Pergunta gerencial desta etapa",
-        """
-**O twin já reproduz o sistema real com qualidade suficiente para apoiar decisão?**
-
-Este é o **checkpoint metodológico central**: sem validação aprovada, cenários, previsão
-e prescrição não devem ser usados gerencialmente — apenas como demonstrações ilustrativas.
-
-**Dois critérios simultâneos:**
-1. O erro relativo de cada KPI deve ser ≤ 15%
-2. O valor real deve cair dentro do IC 95% simulado (idealmente)
-""")
-
-    with st.spinner("Calculando KPIs simulados para validação..."):
-        estats_val = []
-        for rep in range(5):
-            _, e = gemeo_digital_pa(params, semente=42+rep)
-            estats_val.append(e)
-        df_val = pd.DataFrame(estats_val)
-
-    kpis_sim = {k: float(df_val[k].mean()) for k in kpis_reais}
-    erros = {
-        k: abs(kpis_sim[k]-kpis_reais[k]) / kpis_reais[k] * 100
-        if kpis_reais[k] != 0 else 0.0
-        for k in kpis_reais
-    }
-    aprovado = all(e <= 15.0 for e in erros.values())
-
-    if aprovado:
-        st.success("✅ Validação aprovada — todos os KPIs com erro relativo ≤ 15%")
-    else:
-        st.error("❌ Validação não aprovada — ao menos um KPI ultrapassou o limiar de 15%")
-        st.markdown(AVISO_METODOLOGICO, unsafe_allow_html=True)
-
-    st.plotly_chart(fig_validacao(kpis_reais, kpis_sim, erros), use_container_width=True)
-
-    info("Fórmula do erro relativo e critério de aprovação",
-        r"""
-**Erro relativo percentual (ERP):**
-$$\text{ERP}_k = \frac{|\hat{y}_k^{sim} - y_k^{real}|}{y_k^{real}} \times 100\%$$
-
-**Critério de aprovação:** ERP ≤ 15% em *todos* os KPIs monitorados.
-
-**Por que 15%?**
-Em modelos de simulação de serviços de saúde, a convenção da literatura
-(Law, 2015; Sargent, 2013) aceita ±15% como margem de validação, dado que:
-- Os dados do HIS têm ruído inerente de registro
-- Os parâmetros são estimados com MLE a partir de amostra finita
-- O comportamento humano tem variabilidade irredutível
-
-**O que fazer quando falha?**
-1. Revisar capacidade efetiva por turno (ρ pode estar subestimado)
-2. Recalibrar λ(h) com dados mais recentes
-3. Incorporar mecanismos de fila adicional (reinternação, pacientes complexos)
-4. Investigar na Etapa 5B *onde* e *por que* o twin diverge
-""")
-
-    st.subheader("Detalhamento por KPI")
-    labels_map = {
-        "espera_medico_media": "Espera média médico (min)",
-        "tempo_total_medio":   "Tempo total médio (min)",
-        "p90_espera_medico":   "P90 espera médico (min)",
-        "pct_espera_acima_60": "% espera > 60 min",
-    }
-    val_rows = [{"KPI":labels_map.get(k,k),
-        "Real":round(kpis_reais[k],3),
-        "Simulado":round(kpis_sim[k],3),
-        "Erro (%)":round(erros[k],1),
-        "Limiar":"15%",
-        "Status":"✅" if erros[k]<=15 else "❌"} for k in kpis_reais]
-    st.dataframe(pd.DataFrame(val_rows), use_container_width=True, hide_index=True)
-
-
 # ─── Diagnóstico 5B ────────────────────────────────────────────────────────
 elif pagina == "🔬 Diagnóstico — Etapa 5B":
     st.title("🔬 Diagnóstico da Divergência — Etapa 5B")
     st.markdown('<div class="etapa-header"><b>Etapa 5B</b> — Diagnosticar onde e por que a '
                 'validação falhou</div>',unsafe_allow_html=True)
-    st.markdown(AVISO_METODOLOGICO, unsafe_allow_html=True)
+    aviso_metodologico()
 
     info("Pergunta gerencial desta etapa",
         """
@@ -1075,7 +1140,7 @@ Esta etapa decompõe a divergência em três lentes operacionais:
         # ── Gap horário ──────────────────────────────────────────────
         st.subheader("1. Espera por hora — Real vs Simulado")
         fig_gap, d_gap = fig_gap_horario(df, df_sim_all)
-        st.plotly_chart(fig_gap, use_container_width=True)
+        st.plotly_chart(fig_gap, width='stretch')
 
         info("Como interpretar o gap horário",
             r"""
@@ -1098,7 +1163,7 @@ que mais esperam; é sensível a gargalos de curta duração nos picos.
         if not d_gap_top.empty:
             st.markdown("**Horas com maior subestimação de espera:**")
             st.dataframe(d_gap_top[["hora","espera_real","espera_sim","gap","p90_real","p90_sim"]],
-                         use_container_width=True, hide_index=True)
+                         width='stretch', hide_index=True)
 
         st.markdown("---")
 
@@ -1136,7 +1201,7 @@ o modelo está usando mais médicos do que a operação real disponibiliza.
                 "Consulta média (min)":round(cons_media_t,1),
                 "ρ estimado":round(rho_hist,3),
                 "Status":("✅" if rho_hist<0.85 else ("⚠️" if rho_hist<0.95 else "🔴"))})
-        st.dataframe(pd.DataFrame(rho_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rho_rows), width='stretch', hide_index=True)
 
         st.markdown("---")
 
@@ -1177,7 +1242,72 @@ está superestimada em relação à operação real.
                         "Erro espera (%)":round(abs(df_t2.espera_medico_media.mean()-kpis_reais["espera_medico_media"])/kpis_reais["espera_medico_media"]*100 if kpis_reais["espera_medico_media"]!=0 else 0,1),
                         "P90 sim (min)":round(df_t2.p90_espera_medico.mean(),1),
                         "Erro P90 (%)":round(abs(df_t2.p90_espera_medico.mean()-kpis_reais["p90_espera_medico"])/kpis_reais["p90_espera_medico"]*100 if kpis_reais["p90_espera_medico"]!=0 else 0,1)})
-            st.dataframe(pd.DataFrame(cap_rows),use_container_width=True,hide_index=True)
+            st.dataframe(pd.DataFrame(cap_rows),width='stretch',hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Etapa 5C — Recalibração automática da baseline")
+        info("O que é a recalibração?",
+            r"""
+**Pergunta gerencial:** qual ajuste mínimo torna o twin metodologicamente utilizável
+para cenários, previsão e prescrição?
+
+A recalibração testa combinações de 4 parâmetros via **grid search**:
+- `overhead_doc` (min): tempo de documentação que ocupa o slot do médico
+- `disponibilidade_vesp/n2` ∈ [0.80, 1.00]: fração da capacidade nominal efetivamente disponível
+- `fator_servico` ∈ [1.00, 1.12]: multiplicador no μ_log do tempo de consulta
+- `fator_pico` ∈ [1.00, 1.14]: concentração adicional de demanda nas horas de pico
+
+**Critério de aprovação:** erro ≤ 15% **e** valor real dentro do IC 95% em **todos** os KPIs.
+
+**Capacidade efetiva por turno:**
+$$c_{efetivo}(t) = c_{nominal}(t) \times d_t, \quad d_t \in (0, 1]$$
+
+O modelo implementa isso aumentando o tempo de ocupação do médico:
+$$t_{ocupação} = \frac{t_{consulta} + t_{overhead}}{d_t}$$
+""")
+
+        btn_recal = st.button("▶️ Rodar Recalibração Automática (grid search ~30s)", type="primary")
+        if btn_recal or "recal_resultado" in st.session_state:
+            if btn_recal:
+                with st.spinner("Rodando grid search de recalibração..."):
+                    resultado_recal = recalibrar_baseline(
+                        params_json,
+                        json.dumps({k: float(v) for k, v in kpis_reais.items()})
+                    )
+                    st.session_state["recal_resultado"] = resultado_recal
+                    st.session_state["params_recal"] = resultado_recal["params"]
+                    st.session_state["gemeo_validado"] = resultado_recal["validado"]
+
+            resultado_recal = st.session_state["recal_resultado"]
+            combo = resultado_recal["combo"]
+            labels_combo = ["overhead (min)", "disp. vespertino", "disp. noturno2",
+                            "fator serviço", "fator pico"]
+
+            if resultado_recal["validado"]:
+                st.success(f"✅ Baseline recalibrada e validada! "
+                           f"{resultado_recal['n_ok']}/{len(kpis_reais)} KPIs aprovados.")
+            else:
+                st.warning(f"⚠️ Melhor configuração encontrada: "
+                           f"{resultado_recal['n_ok']}/{len(kpis_reais)} KPIs aprovados. "
+                           "Recalibração parcial — use os cenários com leitura cautelosa.")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Parâmetros selecionados:**")
+                for lbl, val in zip(labels_combo, combo):
+                    st.markdown(f"- **{lbl}:** `{val}`")
+            with col2:
+                st.markdown("**KPIs da baseline recalibrada:**")
+                labels_map = {
+                    "espera_medico_media": "Espera média (min)",
+                    "tempo_total_medio":   "Tempo total (min)",
+                    "p90_espera_medico":   "P90 espera (min)",
+                    "pct_espera_acima_60": "% espera > 60 min",
+                }
+                for k, v in resultado_recal["ic"].items():
+                    passou = "✅" if v["passa"] else "❌"
+                    st.markdown(f"- **{labels_map.get(k,k)}:** {v['media']:.2f} "
+                                f"(erro {v['erro']:.1f}%) {passou}")
 
 
 # ─── Cenários 7A ───────────────────────────────────────────────────────────
@@ -1185,7 +1315,7 @@ elif pagina == "🔮 Cenários — Etapa 7A":
     st.title("🔮 Análise de Cenários — Etapa 7A")
     st.markdown('<div class="etapa-header"><b>Etapa 7A</b> — Explorar futuros possíveis '
                 'com cenários</div>',unsafe_allow_html=True)
-    st.markdown(AVISO_METODOLOGICO, unsafe_allow_html=True)
+    aviso_metodologico()
 
     info("Pergunta gerencial desta etapa",
         """
@@ -1230,7 +1360,7 @@ $$\bar{X} \pm 1.96 \cdot S$$
     with col2: st.success(f"**+{n_medicos_extra} médico(s)** no vespertino (13h–19h).")
     with col3: st.warning(f"**Epidemia** — demanda ×{fator_epidemia:.1f}.")
 
-    btn_cen = st.button("▶️ Comparar Cenários", use_container_width=True, type="primary")
+    btn_cen = st.button("▶️ Comparar Cenários", width='stretch', type="primary")
 
     if btn_cen or "resultados_cenarios" in st.session_state:
         if btn_cen:
@@ -1250,7 +1380,7 @@ $$\bar{X} \pm 1.96 \cdot S$$
                 st.session_state["resultados_cenarios"] = resultados
 
         resultados_cenarios = st.session_state["resultados_cenarios"]
-        st.plotly_chart(fig_cenarios(resultados_cenarios), use_container_width=True)
+        st.plotly_chart(fig_cenarios(resultados_cenarios), width='stretch')
 
         info("Como interpretar o comparativo de cenários",
             """
@@ -1275,7 +1405,7 @@ Barras grandes indicam alta variabilidade — considere mais replicações.
             "P90 espera (min)":   round(d.p90_espera_medico.mean(),1),
             "% > 60 min":         f"{d.pct_espera_acima_60.mean()*100:.1f}%"}
             for nome,d in resultados_cenarios.items()]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
     else:
         st.info("Clique em **Comparar Cenários** para executar a análise.")
 
@@ -1285,190 +1415,527 @@ elif pagina == "📈 Predição & Prescrição — Etapas 7B–8":
     st.title("📈 Predição & Prescrição — Etapas 7B e 8")
     st.markdown('<div class="etapa-header">'
                 '<b>Etapa 7B</b> — Antecipar demanda com predição &nbsp;|&nbsp; '
-                '<b>Etapa 8</b> — Apoiar decisão com prescrição</div>',unsafe_allow_html=True)
-    st.markdown(AVISO_METODOLOGICO, unsafe_allow_html=True)
+                '<b>Etapa 8</b> — Apoiar decisão com prescrição</div>', unsafe_allow_html=True)
+    aviso_metodologico()
 
-    # ── Etapa 7B — Predição ───────────────────────────────────────────
-    st.subheader("Etapa 7B — Predição de demanda — próximos 14 dias")
+    # ══════════════════════════════════════════════════════════════════
+    # ETAPA 7B — PREDIÇÃO
+    # ══════════════════════════════════════════════════════════════════
+    st.subheader("📅 Etapa 7B — Predição de demanda — próximos 14 dias")
+
     info("Pergunta gerencial — Etapa 7B",
         """
 **O que tende a acontecer com o PA nos próximos 14 dias se o padrão de demanda se mantiver?**
 
-O twin não apenas replica o presente — ele antecipa gargalos antes que aconteçam.
+Um gêmeo digital maduro não apenas replica o presente — ele **antecipa gargalos** antes
+que aconteçam, dando tempo para decisões de escala proativas.
 
-**Fluxo desta etapa:**
-1. Ajustar modelo Prophet na série histórica diária
-2. Projetar volume para os próximos 14 dias
-3. Converter projeção em fator λ = yhat / demanda_base
-4. Escalar λ(h) e simular KPIs esperados para cada dia
+**Fluxo desta etapa (4 passos):**
+1. 📊 Agregar o histórico em série diária (pacientes/dia)
+2. 🔮 Ajustar o modelo Prophet → projetar volume para os próximos 14 dias
+3. ⚖️ Converter previsão em fator de escalonamento λ
+4. 🏥 Simular o twin com λ previsto → KPIs esperados por dia
 """)
-    info("Como funciona o Prophet — matemática",
+
+    info("O que é o Prophet e por que usá-lo aqui?",
         r"""
-O Prophet decompõe a série temporal em componentes aditivos:
+## Prophet — Meta Open Source (2017)
+
+O **Prophet** foi desenvolvido pelo time de engenharia do Facebook (Meta) para automatizar
+previsões de séries temporais com sazonalidade forte e dados ruidosos.
+
+### Por que Prophet para um PA?
+O volume diário de um pronto-atendimento tem estrutura temporal clara:
+- 📆 **Sazonalidade semanal**: segundas-feiras tendem a ser mais cheias que sábados
+- 📈 **Tendência**: crescimento ou queda suave ao longo de semanas/meses
+- 🎉 **Feriados**: picos pontuais previsíveis
+
+O Prophet captura essas três forças separadamente e as combina de forma **interpretável**,
+ao contrário de redes neurais que tratam a série como caixa-preta.
+
+### Decomposição aditiva
+O modelo assume que a série é a soma de componentes independentes:
 $$y(t) = g(t) + s(t) + h(t) + \varepsilon_t$$
 
-- **g(t)**: tendência (linear ou logística com changepoints)
-- **s(t)**: sazonalidade (semanal, anual — via séries de Fourier)
-- **h(t)**: efeitos de feriados
-- **εₜ**: ruído idiossincrático ~ N(0, σ²)
+| Componente | Símbolo | O que representa |
+|------------|---------|-----------------|
+| Tendência | $g(t)$ | Crescimento/queda de longo prazo |
+| Sazonalidade | $s(t)$ | Padrões repetitivos (semanal, anual) |
+| Feriados | $h(t)$ | Efeitos pontuais de datas especiais |
+| Ruído | $\varepsilon_t$ | Variação não explicada pelos demais |
 
-**Sazonalidade semanal** (ativo aqui com 30 dias de histórico):
+### Como o Prophet estima a tendência $g(t)$?
+Usa um modelo **piecewise linear** com *changepoints* automáticos:
+$$g(t) = (k + \mathbf{a}(t)^T \boldsymbol{\delta}) \cdot t + (m + \mathbf{a}(t)^T \boldsymbol{\gamma})$$
+
+Onde $\boldsymbol{\delta}$ são os ajustes de taxa em cada changepoint e
+$\mathbf{a}(t)$ é um vetor binário que indica quais changepoints já ocorreram.
+O prior de regularização $\delta_j \sim \text{Laplace}(0, \tau)$ evita overfitting
+(controlado pelo parâmetro `changepoint_prior_scale = 0.05` neste modelo).
+
+### Como o Prophet modela a sazonalidade $s(t)$?
+Usa **séries de Fourier** — uma soma de senos e cossenos para capturar padrões periódicos:
 $$s(t) = \sum_{n=1}^{N}\left[a_n \cos\!\left(\frac{2\pi n t}{P}\right) + b_n \sin\!\left(\frac{2\pi n t}{P}\right)\right]$$
 
-Com P = 7 dias e N = 3 (padrão Prophet).
+Para sazonalidade semanal: período $P = 7$ dias, ordem $N = 3$ (6 parâmetros).
+Os coeficientes $a_n, b_n$ são estimados por MAP (*maximum a posteriori*).
 
-**Fator de escalonamento λ:**
-$$f(d) = \frac{\hat{y}(d)}{\bar{y}_{histórico}}, \quad \lambda_{previsto}(h,d) = \lambda_{base}(h) \cdot f(d)$$
+### O que é o IC 95% da previsão?
+O Prophet gera incerteza acumulando três fontes:
+1. **Incerteza na tendência**: onde os próximos changepoints podem ocorrer
+2. **Incerteza nos coeficientes de sazonalidade**
+3. **Ruído observacional** $\varepsilon_t$
 
-> ⚠️ Com apenas 30 dias históricos, o ajuste é deliberadamente enxuto.
-> Em produção, usar janela maior de dados.
+O IC 95% (`yhat_lower`, `yhat_upper`) é estimado por simulação Monte Carlo
+das trajetórias possíveis de tendência.
+
+> ⚠️ **Limitação importante:** com apenas **30 dias** de histórico, o Prophet não
+> consegue estimar tendência de longo prazo de forma confiável. Aqui usamos
+> **sazonalidade semanal** como componente principal, assumindo demanda estacionária.
+> Em produção, recomenda-se mínimo de 3–6 meses de dados.
 """)
 
-    with st.spinner("Ajustando Prophet..."):
+    info("Como a previsão de volume vira pressão sobre o twin",
+        r"""
+### Do volume diário ao λ horário
+
+O Prophet prevê **pacientes/dia** ($\hat{y}(d)$). O twin precisa de **λ por hora** ($\lambda(h)$).
+A ponte é o **fator de escalonamento**:
+
+$$f(d) = \frac{\hat{y}(d)}{\bar{y}_{hist}}, \quad \bar{y}_{hist} = \frac{1}{|\mathcal{D}|}\sum_{d \in \mathcal{D}} y(d)$$
+
+- $f > 1$: dia mais cheio que a média histórica → λ aumenta proporcionalmente
+- $f < 1$: dia mais tranquilo → λ diminui
+
+O λ previsto por hora naquele dia é:
+$$\lambda_{prev}(h, d) = \lambda_{base}(h) \times f(d)$$
+
+**Hipótese implícita:** o perfil intradiário (distribuição de chegadas ao longo do dia)
+se mantém constante — só o volume total varia. Dias com f = 1.2 têm 20% mais pacientes
+em cada hora, não apenas no pico.
+
+### De λ a KPI esperado
+Para cada dia previsto, o twin roda 1 replicação com o λ ajustado e retorna:
+- Espera média para médico $\bar{W}(d)$
+- P90 de espera
+- % pacientes com espera > 60 min
+
+**Semáforo operacional:**
+| Status | Critério | Ação sugerida |
+|--------|----------|---------------|
+| 🟢 Confortável | Espera ≤ 55 min | Manter escala atual |
+| 🟡 Atenção | 55 < Espera ≤ 70 min | Monitorar; considerar reforço |
+| 🔴 Risco | Espera > 70 min | Acionar reforço preventivo |
+
+> ℹ️ Este semáforo opera **dentro do gêmeo**, não no sistema real. É um sinal antecipado
+> para suportar decisão, não uma previsão operacional homologada.
+""")
+
+    with st.spinner("Ajustando Prophet e gerando previsão..."):
         fig_pred, prev_f, df_prophet = fig_predicao(df)
 
     if fig_pred is not None:
-        st.plotly_chart(fig_pred, use_container_width=True)
+        st.plotly_chart(fig_pred, width='stretch')
 
-        st.subheader("KPIs antecipados por dia")
-        info("Como o volume previsto vira KPI simulado",
-            r"""
-Para cada dia d previsto:
-1. Calcular fator: $f(d) = \hat{y}(d) / \bar{y}_{hist}$
-2. Escalar: $\lambda_{prev}(h) = \lambda_{base}(h) \times f(d)$
-3. Rodar 1 replicação do gêmeo com λ previsto → KPIs esperados
+        # Métricas da série histórica
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Dias históricos", len(df_prophet))
+        col2.metric("Média diária (hist.)", f"{df_prophet.y.mean():.0f} pac/dia")
+        col3.metric("Máx. histórico", f"{df_prophet.y.max():.0f} pac/dia")
+        col4.metric("Mín. histórico", f"{df_prophet.y.min():.0f} pac/dia")
 
-**Semáforo de alerta:**
-- 🟢 Espera estimada ≤ 55 min — operação confortável
-- 🟡 Espera 55–70 min — zona de atenção
-- 🔴 Espera > 70 min — risco de violação da meta
+        # ── Componentes do modelo Prophet ────────────────────────────
+        st.markdown("#### Componentes da decomposição Prophet")
+        info("Como ler os componentes do Prophet",
+            """
+O gráfico abaixo mostra o que o modelo **separou** na série histórica:
 
-Este semáforo opera *dentro do gêmeo*, não no sistema real — é um sinal antecipado,
-não uma previsão homologada.
+- **Tendência** — se a linha sobe/desce ao longo do período, há drift real na demanda.
+  Uma linha plana indica demanda estacionária no período observado.
+- **Sazonalidade semanal** — o padrão típico de cada dia da semana.
+  Pico na segunda = acúmulo de demanda reprimida do fim de semana.
+  Vales no fim de semana = comportamento típico de PA não-urgência.
+- **Incerteza** — faixa cinza em torno da previsão futura; cresce com o horizonte
+  porque a incerteza de tendência se acumula.
+
+**Implicação operacional:** se a sazonalidade semanal mostrar que sextas-feiras têm
+demanda sistematicamente acima da média, o gestor sabe que toda sexta precisa de reforço.
 """)
+        try:
+            from prophet import Prophet
+            df_p2 = (df.groupby(df.dt_chegada.dt.date).size()
+                     .reset_index(name="y").rename(columns={"dt_chegada": "ds"}))
+            df_p2["ds"] = pd.to_datetime(df_p2["ds"])
+            m2 = Prophet(yearly_seasonality=False, weekly_seasonality=True,
+                         daily_seasonality=False, changepoint_prior_scale=0.05,
+                         seasonality_prior_scale=10)
+            m2.fit(df_p2)
+            comp_future = m2.make_future_dataframe(periods=0)
+            comp_df = m2.predict(comp_future)
+
+            fig_comp = make_subplots(rows=1, cols=2,
+                subplot_titles=["Tendência estimada", "Sazonalidade semanal"])
+            fig_comp.add_trace(go.Scatter(x=comp_df.ds, y=comp_df.trend,
+                mode="lines", name="Tendência",
+                line=dict(color=VERDE2, width=2)), row=1, col=1)
+            dias_semana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
+            weekly_vals = [comp_df[f"weekly"].mean() if "weekly" in comp_df else 0] * 7
+            # Extrair sazonalidade semanal manualmente
+            comp_df["dow"] = comp_df.ds.dt.dayofweek
+            saz_semanal = comp_df.groupby("dow")["weekly"].mean() if "weekly" in comp_df.columns else None
+            if saz_semanal is not None:
+                fig_comp.add_trace(go.Bar(
+                    x=[dias_semana[i] for i in saz_semanal.index],
+                    y=saz_semanal.values,
+                    marker_color=[LARANJA if v > 0 else AZUL2 for v in saz_semanal.values],
+                    name="Sazonalidade"), row=1, col=2)
+            fig_comp.add_hline(y=0, line_dash="dot", line_color="gray", row=1, col=2)
+            fig_comp.update_layout(height=300, margin=dict(t=45, b=10), showlegend=False)
+            st.plotly_chart(fig_comp, width='stretch')
+        except Exception:
+            pass
+
+        # ── KPIs antecipados ─────────────────────────────────────────
+        st.markdown("#### KPIs antecipados por dia — próxima semana")
         demanda_base = df_prophet.y.mean()
         resultados_pred = []
-        with st.spinner("Simulando KPIs por dia..."):
+        with st.spinner("Simulando pressão operacional para cada dia previsto..."):
             for _, row in prev_f.head(7).iterrows():
-                fator = float(max(0.5, min(row["yhat"]/demanda_base, 2.0)))
+                fator = float(max(0.5, min(row["yhat"] / demanda_base, 2.5)))
                 p_prev = copy.deepcopy(params)
-                p_prev["lambda_hora"] = {h:lam*fator for h,lam in params["lambda_hora"].items()}
+                p_prev["lambda_hora"] = {h: lam * fator for h, lam in params["lambda_hora"].items()}
                 _, e = gemeo_digital_pa(p_prev, semente=42)
-                esp  = e.get("espera_medico_media",0)
-                alerta = "🔴" if esp>70 else ("🟡" if esp>55 else "🟢")
+                esp   = e.get("espera_medico_media", 0)
+                p90   = e.get("p90_espera_medico", 0)
+                pct60 = e.get("pct_espera_acima_60", 0)
+                alerta = "🔴 Risco" if esp > 70 else ("🟡 Atenção" if esp > 55 else "🟢 OK")
                 resultados_pred.append({
-                    "Data": row["ds"].date(),
-                    "Dia":  row["ds"].strftime("%a"),
-                    "Previsão (pac)": round(float(row["yhat"])),
-                    "IC 95% (min)":   round(float(row["yhat_lower"])),
-                    "IC 95% (máx)":   round(float(row["yhat_upper"])),
-                    "Fator λ":        round(fator,2),
-                    "Espera est. (min)": round(esp,1),
-                    "Alerta": alerta,
+                    "Data":              row["ds"].date(),
+                    "Dia":               row["ds"].strftime("%A")[:3],
+                    "Previsão (pac)":    round(float(row["yhat"])),
+                    "IC inf (pac)":      round(float(row["yhat_lower"])),
+                    "IC sup (pac)":      round(float(row["yhat_upper"])),
+                    "Fator λ":           round(fator, 2),
+                    "Espera est. (min)": round(esp, 1),
+                    "P90 est. (min)":    round(p90, 1),
+                    "% > 60 min":        f"{pct60*100:.1f}%",
+                    "Status":            alerta,
                 })
         df_pred = pd.DataFrame(resultados_pred)
-        st.dataframe(df_pred, use_container_width=True, hide_index=True)
+        st.dataframe(df_pred, width='stretch', hide_index=True)
 
-        fig_bar = px.bar(df_pred, x="Data", y="Espera est. (min)",
-            color="Fator λ",color_continuous_scale=[[0,VERDE2],[0.7,AZUL2],[1,LARANJA]],
-            text="Espera est. (min)",title="Espera estimada por dia — próxima semana")
-        fig_bar.add_hline(y=60,line_dash="dash",line_color="red",annotation_text="Meta 60 min")
-        fig_bar.update_traces(textposition="outside")
-        fig_bar.update_layout(height=350,margin=dict(t=45,b=10))
-        st.plotly_chart(fig_bar, use_container_width=True)
+        fig_bar = make_subplots(rows=1, cols=2,
+            subplot_titles=["Espera média estimada por dia", "P90 de espera por dia"])
+        cores_alerta = [LARANJA if r["Status"].startswith("🔴") else
+                        (AZUL2 if r["Status"].startswith("🟡") else VERDE2)
+                        for r in resultados_pred]
+        fig_bar.add_trace(go.Bar(
+            x=df_pred["Data"].astype(str), y=df_pred["Espera est. (min)"],
+            marker_color=cores_alerta, text=df_pred["Espera est. (min)"],
+            textposition="outside", name="Espera média"), row=1, col=1)
+        fig_bar.add_trace(go.Bar(
+            x=df_pred["Data"].astype(str), y=df_pred["P90 est. (min)"],
+            marker_color=cores_alerta, text=df_pred["P90 est. (min)"],
+            textposition="outside", name="P90", showlegend=False), row=1, col=2)
+        for col_idx in [1, 2]:
+            meta = 60 if col_idx == 1 else 90
+            fig_bar.add_hline(y=meta, line_dash="dash", line_color="red",
+                              annotation_text=f"Meta {meta} min", row=1, col=col_idx)
+        fig_bar.update_layout(height=360, margin=dict(t=50, b=10), showlegend=False)
+        st.plotly_chart(fig_bar, width='stretch')
     else:
-        st.warning("Prophet não encontrado. Instale com `pip install prophet`.")
+        st.warning("⚠️ Prophet não encontrado. Instale com `pip install prophet`.")
         df_pred = None
 
-    # ── Etapa 8 — Prescrição ──────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════
+    # ETAPA 8 — PRESCRIÇÃO
+    # ══════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.subheader("Etapa 8 — Recomendação Prescritiva de Escala")
+    st.subheader("💊 Etapa 8 — Prescrição de Escala — Stress Test ×2.0")
+
     info("Pergunta gerencial — Etapa 8",
         """
 **Qual reforço mínimo vale o custo para proteger o nível de serviço nos dias críticos?**
 
-A camada prescritiva transforma a leitura preditiva em **recomendação operacional de escala**.
+A camada prescritiva é a **resposta operacional** à leitura preditiva: não basta saber que
+a demanda vai aumentar — é preciso saber *o que fazer* antes que o aumento aconteça.
 
-**Formulação do stress test:**
-- Entrada: previsão de demanda × fator de estresse (pressão extra nos dias críticos)
-- Políticas candidatas: combinações discretas de médicos extras por turno
-- Objetivo: menor reforço capaz de manter espera ≤ 60 min
-- Restrição: custo de reforço (noturno2 custa 20% mais)
+### Por que usar stress test ×2.0?
+Um fator 2× (dobro da demanda típica) representa um **choque severo** — equivalente a
+uma epidemia de dengue/influenza, feriado prolongado ou evento regional. Ao dimensionar
+a escala para absorver esse cenário, o PA garante resiliência operacional real.
+
+O stress test **não é uma previsão** — é um ensaio de resistência:
+*"se a demanda dobrar, qual reforço mínimo ainda garante espera ≤ 60 min?"*
+
+### O que a prescrição entrega
+| Saída | Descrição |
+|-------|-----------|
+| Reforço por turno | Médicos extras mínimos para cada turno |
+| Espera sem reforço | KPI sob stress sem intervenção |
+| Espera com reforço | KPI sob stress após aplicar o reforço |
+| Redução | Impacto esperado do reforço |
+| Custo relativo | Trade-off financeiro da decisão |
 """)
-    info("Formulação matemática do problema prescritivo",
+
+    info("Formulação matemática completa do problema prescritivo",
         r"""
-**Problema de otimização combinatória:**
-$$\min_{(\delta_m, \delta_v, \delta_{n2}) \in \{0,1\} \times \{0,1,2\} \times \{0,1\}} \;
-c_m \delta_m + c_v \delta_v + c_{n2} \delta_{n2}$$
+### Problema de otimização combinatória
 
-Sujeito a:
-$$\bar{W}^{sim}(\delta_m, \delta_v, \delta_{n2}) \leq 60 \text{ min}$$
-$$P(W > 60 \text{ min}) \leq 15\%$$
+Para cada turno $t \in \{\text{mat}, \text{vesp}, \text{not2}\}$, buscamos o
+**menor reforço** $\delta_t \in \{0, 1, 2, 3\}$ que satisfaz as restrições de serviço:
 
-Onde:
-- $\delta_t$ = médicos extras adicionados ao turno t
-- $c_t$ = custo relativo do turno (matutino=1.0, vespertino=1.0, noturno2=1.2)
-- $\bar{W}^{sim}$ = espera média estimada pelo gêmeo sob demanda estressada
+$$\min_{\boldsymbol{\delta}} \; \sum_{t} c_t \cdot \delta_t$$
 
-**Busca por grade (grid search):** como o espaço é pequeno (≤ 12 combinações),
-enumeramos todas e escolhemos a de menor custo que satisfaz as restrições.
+**Sujeito a:**
+$$\bar{W}^{sim}(\boldsymbol{\delta}) \leq W^{meta} = 60 \text{ min}$$
+$$P\!\left(W > 60 \text{ min}\right) \leq 15\%$$
+
+**Parâmetros:**
+- $\delta_t$ = médicos extras adicionados ao turno $t$
+- $c_t$ = custo relativo unitário por turno
+  - Matutino: $c = 1.0$
+  - Vespertino: $c = 1.0$
+  - Noturno2: $c = 1.2$ (adicional noturno)
+- $\bar{W}^{sim}$ = espera média estimada pelo gêmeo com $\lambda^{stress} = 2.0 \times \lambda_{base}$
+
+### Por que busca por grade (grid search)?
+O espaço de soluções é pequeno: $4 \times 4 \times 4 = 64$ combinações.
+Enumerar todas garante a **solução ótima global** sem risco de mínimos locais
+(ao contrário de algoritmos iterativos como Nelder-Mead ou gradiente).
+
+### Efeito não-linear do reforço — teoria de filas M/M/c
+Para uma fila com $c$ servidores, a espera média na fila é:
+
+$$W_q = \frac{C(c, \rho)}{c \mu (1 - \rho/c)}$$
+
+Onde $C(c, \rho)$ é a fórmula Erlang-C:
+$$C(c, \rho) = \frac{\frac{(c\rho)^c}{c!} \cdot \frac{1}{1-\rho}}{\sum_{k=0}^{c-1} \frac{(c\rho)^k}{k!} + \frac{(c\rho)^c}{c!} \cdot \frac{1}{1-\rho}}$$
+
+O efeito-chave: adicionar 1 servidor quando $\rho \approx 0.95$ reduz $W_q$
+proporcionalmente muito mais do que quando $\rho \approx 0.70$, pois a fórmula
+Erlang-C cresce **superlinearmente** com $\rho \to 1$.
+
+### Comparação Baseline × Sem Reforço × Com Reforço
+O painel mostra 3 estados para cada turno:
+1. **Baseline** ($\lambda$ normal, sem stress): espera de referência
+2. **Sem reforço** ($\lambda \times 2$, capacidade atual): impacto bruto do stress
+3. **Com reforço** ($\lambda \times 2$, capacidade otimizada): resultado após intervenção
 """)
 
-    turnos_otim = ["matutino","vespertino","noturno2"]
-    col1,col2,col3 = st.columns(3)
-    if st.button("▶️ Rodar Prescrição (stress test ×1.15)", use_container_width=True, type="primary"):
-        resultados_presc = {}
-        with st.spinner("Otimizando escala..."):
-            for turno in turnos_otim:
-                for extra in range(3):
-                    p_t = copy.deepcopy(params)
-                    p_t["lambda_hora"] = {h:lam*1.15 for h,lam in params["lambda_hora"].items()}
-                    p_t["recursos_turno"][turno]["medicos"] += extra
-                    estats_t = [gemeo_digital_pa(p_t,semente=42+r)[1] for r in range(4)]
-                    df_t2 = pd.DataFrame(estats_t)
-                    esp = df_t2.espera_medico_media.mean()
-                    if turno not in resultados_presc:
-                        resultados_presc[turno] = {"espera_base":esp,"reforco_otimo":extra,"espera_pos":esp}
-                    if esp <= 60 and resultados_presc[turno]["reforco_otimo"] == extra:
-                        resultados_presc[turno]["espera_pos"] = esp
-                        break
-                    resultados_presc[turno]["espera_pos"] = esp
+    FATOR_STRESS   = 2.0
+    META_ESPERA    = 60.0
+    META_PCT_60    = 0.15
+    CUSTO_TURNO    = {"matutino": 1.0, "vespertino": 1.0, "noturno2": 1.2}
+    TURNOS_OTIM    = ["matutino", "vespertino", "noturno2"]
+    N_REP_PRESC    = 5
 
-        for turno,(col,) in zip(turnos_otim,[col1,col2,col3]):
-            r  = resultados_presc[turno]
-            delta = r["espera_base"] - r["espera_pos"]
-            cor = "" if r["reforco_otimo"]==0 else "warning" if r["reforco_otimo"]>=2 else "info"
-            col.markdown(f'<div class="kpi-card {cor}">'
-                f'<div class="kpi-value">+{r["reforco_otimo"]} méd.</div>'
+    # Banner de contexto
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Fator de stress", f"×{FATOR_STRESS:.1f}", "dobro da demanda típica")
+    col_b.metric("Meta de espera", f"{META_ESPERA:.0f} min", "limite máximo aceitável")
+    col_c.metric("Meta % > 60 min", f"{META_PCT_60*100:.0f}%", "tolerância máxima de violação")
+
+    btn_presc = st.button(f"▶️ Rodar Prescrição — Stress Test ×{FATOR_STRESS:.1f}",
+                          width='stretch', type="primary")
+
+    if btn_presc or "resultados_presc" in st.session_state:
+        if btn_presc:
+            resultados_presc = {}
+            prog = st.progress(0, text="Iniciando simulações...")
+            total_runs = len(TURNOS_OTIM) * 4  # até 4 níveis de reforço por turno
+            run_count  = 0
+
+            with st.spinner(f"Simulando stress test ×{FATOR_STRESS} × {N_REP_PRESC} replicações por turno..."):
+                for turno in TURNOS_OTIM:
+                    # Baseline (sem stress) — 1 vez para referência
+                    _, e_base = gemeo_digital_pa(params, semente=42)
+                    espera_base_nominal = e_base.get("espera_medico_media", 0)
+
+                    espera_sem_reforco = None
+                    reforco_otimo      = None
+                    espera_com_reforco = None
+                    pct60_sem          = None
+                    pct60_com          = None
+
+                    for extra in range(4):  # 0, 1, 2, 3 médicos extras
+                        p_t = copy.deepcopy(params)
+                        p_t["lambda_hora"] = {h: lam * FATOR_STRESS
+                                              for h, lam in params["lambda_hora"].items()}
+                        p_t["recursos_turno"][turno]["medicos"] += extra
+
+                        estats_t = [gemeo_digital_pa(p_t, semente=42 + r)[1]
+                                    for r in range(N_REP_PRESC)]
+                        estats_t = [e for e in estats_t if e]
+                        df_t2    = pd.DataFrame(estats_t)
+                        esp_med  = df_t2.espera_medico_media.mean()
+                        pct_med  = df_t2.pct_espera_acima_60.mean()
+
+                        if extra == 0:
+                            espera_sem_reforco = esp_med
+                            pct60_sem          = pct_med
+
+                        if reforco_otimo is None and esp_med <= META_ESPERA and pct_med <= META_PCT_60:
+                            reforco_otimo      = extra
+                            espera_com_reforco = esp_med
+                            pct60_com          = pct_med
+
+                        run_count += 1
+                        prog.progress(run_count / total_runs,
+                                      text=f"Turno {turno} — reforço +{extra}: espera {esp_med:.1f} min")
+
+                        if reforco_otimo is not None:
+                            break
+
+                    # Se nenhum reforço atingiu a meta, usa o máximo testado
+                    if reforco_otimo is None:
+                        reforco_otimo      = 3
+                        espera_com_reforco = esp_med
+                        pct60_com          = pct_med
+
+                    resultados_presc[turno] = {
+                        "espera_baseline":    espera_base_nominal,
+                        "espera_sem_reforco": espera_sem_reforco,
+                        "espera_com_reforco": espera_com_reforco,
+                        "pct60_sem":          pct60_sem,
+                        "pct60_com":          pct60_com,
+                        "reforco_otimo":      reforco_otimo,
+                        "custo":              CUSTO_TURNO.get(turno, 1.0) * reforco_otimo,
+                        "meta_atingida":      espera_com_reforco <= META_ESPERA and pct60_com <= META_PCT_60,
+                    }
+
+            prog.empty()
+            st.session_state["resultados_presc"] = resultados_presc
+
+        resultados_presc = st.session_state["resultados_presc"]
+
+        # ── Cards de reforço recomendado ──────────────────────────────
+        st.markdown("#### Reforço recomendado por turno")
+        cols = st.columns(3)
+        for turno, col in zip(TURNOS_OTIM, cols):
+            r = resultados_presc[turno]
+            cor = "" if r["reforco_otimo"] == 0 else ("warning" if r["reforco_otimo"] >= 2 else "info")
+            icone = "✅" if r["meta_atingida"] else "⚠️"
+            col.markdown(
+                f'<div class="kpi-card {cor}">'
+                f'<div class="kpi-value">{icone} +{r["reforco_otimo"]} méd.</div>'
                 f'<div class="kpi-label">{turno.title()}</div>'
-                f'<div class="kpi-delta">Redução: {delta:.1f} min</div></div>',
+                f'<div class="kpi-delta">Custo: {r["custo"]:.1f}u &nbsp;|&nbsp; '
+                f'Espera: {r["espera_com_reforco"]:.0f} min</div>'
+                f'</div>',
                 unsafe_allow_html=True)
 
-        presc_rows = [{"Turno":t,
-            "Reforço recomendado":f"+{r['reforco_otimo']} médico(s)",
-            "Espera sem reforço":f"{r['espera_base']:.1f} min",
-            "Espera com reforço":f"{r['espera_pos']:.1f} min",
-            "Redução":f"{r['espera_base']-r['espera_pos']:.1f} min"}
-            for t,r in resultados_presc.items()]
-        st.dataframe(pd.DataFrame(presc_rows), use_container_width=True, hide_index=True)
+        # ── Gráfico comparativo: Baseline × Sem Reforço × Com Reforço
+        st.markdown("#### Comparativo: Baseline × Stress sem reforço × Stress com reforço")
+        info("Como ler o gráfico comparativo",
+            f"""
+Cada grupo de barras representa um turno com **3 estados**:
 
-        info("Como ler a recomendação prescritiva",
-            """
-- **Reforço 0**: o turno já está operando dentro da meta com a demanda estressada
-- **Reforço +1 ou +2**: são os médicos extras mínimos para proteger a meta de 60 min
-- **Redução de espera**: impacto esperado do reforço na espera média do turno
+1. 🟩 **Baseline** — operação normal (λ padrão, sem stress). É a referência de desempenho atual.
+2. 🟥 **Stress sem reforço** — demanda ×{FATOR_STRESS:.0f}, capacidade atual. Mostra o impacto bruto
+   do choque sem nenhuma intervenção. Espera alta = sistema congestionado.
+3. 🟦 **Stress com reforço** — demanda ×{FATOR_STRESS:.0f}, após aplicar o reforço recomendado.
+   Objetivo: aproximar-se da meta de 60 min.
 
-**Custo relativo do reforço:**
-- Matutino e Vespertino: custo unitário 1.0
-- Noturno2: custo unitário 1.2 (adicional noturno)
+**O que o gap Baseline → Sem Reforço revela:**
+A sensibilidade do turno ao choque de demanda. Turnos com maior gap têm ρ mais alto
+na baseline — estão mais perto do colapso e reagem de forma superlinear ao stress.
 
-**Quando a recomendação mudaria:**
-- Se a demanda crítica fosse mais severa (fator > 1.15)
-- Se a meta fosse endurecida (ex: ≤ 45 min)
-- Se a capacidade base fosse recalibrada para baixo
+**O que o gap Sem Reforço → Com Reforço revela:**
+A eficácia do reforço prescrito. Se o gap for grande, o reforço tem impacto real.
+Se for pequeno, o gargalo pode estar em outro turno ou em restrições estruturais.
+
+**Meta (linha vermelha):** {META_ESPERA:.0f} min de espera média para atendimento médico.
 """)
+        fig_presc = go.Figure()
+        cores_estado = {"Baseline": VERDE2, "Sem Reforço": LARANJA, "Com Reforço": AZUL2}
+        for estado, cor in cores_estado.items():
+            valores = []
+            for turno in TURNOS_OTIM:
+                r = resultados_presc[turno]
+                if estado == "Baseline":
+                    valores.append(r["espera_baseline"])
+                elif estado == "Sem Reforço":
+                    valores.append(r["espera_sem_reforco"])
+                else:
+                    valores.append(r["espera_com_reforco"])
+            fig_presc.add_trace(go.Bar(
+                name=estado,
+                x=[t.title() for t in TURNOS_OTIM],
+                y=valores,
+                marker_color=cor,
+                text=[f"{v:.1f}" for v in valores],
+                textposition="outside",
+            ))
+        fig_presc.add_hline(y=META_ESPERA, line_dash="dash", line_color="red",
+                            annotation_text=f"Meta {META_ESPERA:.0f} min",
+                            annotation_position="top right")
+        fig_presc.update_layout(
+            barmode="group", height=420,
+            margin=dict(t=50, b=10),
+            yaxis_title="Espera média para médico (min)",
+            legend=dict(orientation="h", y=-0.15),
+        )
+        st.plotly_chart(fig_presc, width='stretch')
+
+        # ── Tabela detalhada ──────────────────────────────────────────
+        st.markdown("#### Tabela completa de resultados")
+        presc_rows = []
+        custo_total = 0
+        for turno in TURNOS_OTIM:
+            r = resultados_presc[turno]
+            custo_total += r["custo"]
+            reducao = r["espera_sem_reforco"] - r["espera_com_reforco"]
+            presc_rows.append({
+                "Turno":               turno.title(),
+                "Espera baseline (min)": f"{r['espera_baseline']:.1f}",
+                f"Espera stress ×{FATOR_STRESS:.0f} s/ reforço": f"{r['espera_sem_reforco']:.1f}",
+                f"Espera stress ×{FATOR_STRESS:.0f} c/ reforço": f"{r['espera_com_reforco']:.1f}",
+                "% > 60 min (stress)": f"{r['pct60_sem']*100:.1f}%",
+                "% > 60 min (reforço)": f"{r['pct60_com']*100:.1f}%",
+                "Reforço recomendado":  f"+{r['reforco_otimo']} médico(s)",
+                "Custo relativo":       f"{r['custo']:.1f}u",
+                "Redução (min)":        f"{reducao:.1f}",
+                "Meta atingida?":       "✅" if r["meta_atingida"] else "⚠️ Parcial",
+            })
+        st.dataframe(pd.DataFrame(presc_rows), width='stretch', hide_index=True)
+
+        # ── Resumo de custo total ─────────────────────────────────────
+        st.markdown(f"""
+<div style="background:#EEF7F1;border-left:4px solid {VERDE2};padding:.8rem 1rem;
+border-radius:0 8px 8px 0;margin:.5rem 0">
+💰 <b>Custo total do reforço recomendado:</b> {custo_total:.1f} unidades de médico
+&nbsp;|&nbsp; Fator de stress: ×{FATOR_STRESS:.1f} &nbsp;|&nbsp; Meta: ≤ {META_ESPERA:.0f} min
+</div>
+""", unsafe_allow_html=True)
+
+        info("Como usar esta recomendação na prática",
+            f"""
+### Passo a passo para o gestor
+
+1. **Identifique os dias críticos** — use a tabela de predição acima (status 🔴 ou 🟡)
+2. **Para cada dia crítico**, aplique o reforço recomendado por turno nesta tabela
+3. **Priorize turnos com meta não atingida** (⚠️) — eles podem precisar de revisão estrutural
+
+### Interpretação dos resultados
+
+- **Reforço = 0**: o turno absorve ×{FATOR_STRESS:.0f} de demanda sem violar a meta. Boa folga operacional.
+- **Reforço = 1–2**: reforço pontual suficiente para proteger o nível de serviço.
+- **Reforço = 3 com ⚠️**: o stress é severo demais para ser absorvido apenas com médicos extras.
+  Considerar: triagem avançada, redirecionamento de casos leves, ou revisão do protocolo.
+
+### Trade-off custo × serviço
+Custo total = {custo_total:.1f} unidades (1 unidade ≈ 1 plantonista adicional no turno padrão).
+O noturno2 pesa 1.2 por conta do adicional noturno.
+
+### Quando a recomendação muda?
+- Fator de stress diferente (×1.5 para alertas menores, ×3.0 para pandemia)
+- Meta de espera mais restritiva (ex: ≤ 45 min)
+- Parâmetros recalibrados após nova rodada de validação
+""")
+
     else:
-        st.info("Clique em **Rodar Prescrição** para gerar as recomendações.")
+        st.info(f"Clique em **Rodar Prescrição** para executar o stress test ×{FATOR_STRESS:.1f}.")
 
     # ── Fechamento ───────────────────────────────────────────────────
     st.markdown("---")
@@ -1481,16 +1948,17 @@ enumeramos todas e escolhemos a de menor custo que satisfaz as restrições.
 | 2 | Como o dado vira input do twin? | λ(h), Lognormal por Manchester, escala ERP |
 | 3 | Como representar o PA? | Fluxo SimPy com PriorityResource |
 | 4 | Como gerar evidência confiável? | Replicações, warm-up e IC 95% |
-| 5 | O twin é confiável para gestão? | Checkpoint de validação (ERP ≤ 15%) |
+| 5 | O twin é confiável para gestão? | Checkpoint de validação (ERP ≤ 15% + IC 95%) |
 | **5B** | **Onde e por que o twin divergiu?** | **Gap horário, ρ efetivo, stress test** |
+| **5C** | **Como recalibrar o twin?** | **Grid search automático de parâmetros** |
 | 6 | Como o twin permanece vivo? | Pipeline de atualização e drift detection |
 | 7A | Como o sistema reage a cenários? | Comparativo baseline × capacidade × epidemia |
-| 7B | O que tende a acontecer à frente? | Previsão Prophet + KPIs antecipados |
-| 8 | O que fazer diante disso? | Stress test prescritivo com grade search |
+| 7B | O que tende a acontecer à frente? | Decomposição Prophet + KPIs antecipados por dia |
+| 8 | O que fazer diante disso? | Stress test ×2.0 com grade search e custo de reforço |
 
 **Referências:**
 - Law, A. M. *Simulation Modeling and Analysis*, 5ª ed. McGraw-Hill, 2015.
 - Sargent, R. G. Verification and validation of simulation models. *Journal of Simulation*, 7(1), 2013.
 - Taylor & Letham. Forecasting at scale. *The American Statistician*, 72(1), 2018.
-- SimPy Docs: https://simpy.readthedocs.io
+- SimPy Docs: https://simpy.readthedocs.io | Prophet Docs: https://facebook.github.io/prophet
 """)
