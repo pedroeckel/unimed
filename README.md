@@ -10,7 +10,7 @@
 
 ## Visão Geral
 
-Este repositório contém o **material prático** das aulas **D9 e D10**. A D9 mostra como extrair, limpar e transformar dados hospitalares em **inputs prontos para simulação**. A D10 usa esses insumos para apresentar, de forma didática, os principais conceitos de **SimPy** com exemplos hospitalares em notebooks Jupyter.
+Este repositório contém o **material prático** das aulas **D9 e D10**. A D9 mostra como extrair, limpar e transformar dados hospitalares em **inputs prontos para simulação**. A D10 usa esses insumos para apresentar, de forma didática, os principais conceitos de **SimPy** com exemplos hospitalares em notebooks Jupyter e fechar o ciclo do gêmeo digital com camadas **descritiva, preditiva e prescritiva**.
 
 O pipeline percorre sete etapas — da conexão à API FHIR até a exportação dos parâmetros calibrados em CSV — e depois conecta esses dados à camada de modelagem em SimPy. O material cobre interoperabilidade, qualidade de dados, KPIs operacionais, fundamentos de DES e conformidade com a LGPD.
 
@@ -31,7 +31,7 @@ HIS (HL7 FHIR R4)         ERP (SQL / batch)
           λ por hora · μ por risco
                    │
                    ▼
-          inputs_*.csv  ──▶  Notebooks didáticos de SimPy (D10)
+          inputs_*.csv  ──▶  SimPy + previsão + otimização (D10)
 ```
 
 ---
@@ -52,17 +52,23 @@ code/
 │   ├── fig3_volume_dia.png            ← volume de atendimentos por dia da semana
 │   ├── fig4_espera_risco.png          ← tempo de espera por nível Manchester
 │   └── fig5_heatmap.png               ← heatmap hora × dia da semana
-└── D10/
-    ├── D10_GemeDigital_PontaAPonta.ipynb      ← notebook principal de gêmeo digital
-    └── simpy_exemplos/
-        ├── 00_fundamentos_simpy.ipynb
-        ├── 01_triagem_classificacao_risco.ipynb
-        ├── 02_leitos_uti_timeout.ipynb
-        ├── 03_fluxo_cadastro_alta.ipynb
-        ├── 04_escala_enfermagem_container.ipynb
-        ├── 05_despacho_ambulancias_filterstore.ipynb
-        ├── README.md                   ← guia da trilha didática
-        └── ex*.py                      ← versões script de apoio
+├── D10/
+│   ├── notebooks/
+│   │   ├── D10_GemeDigital_PontaAPonta.ipynb  ← notebook integrador do gêmeo digital
+│   │   └── d10_fig*.png               ← figuras exportadas da aula final
+│   ├── simpy_exemplos/
+│   │   ├── 00_fundamentos_simpy.ipynb
+│   │   ├── 01_triagem_classificacao_risco.ipynb
+│   │   ├── 02_leitos_uti_timeout.ipynb
+│   │   ├── 03_fluxo_cadastro_alta.ipynb
+│   │   ├── 04_escala_enfermagem_container.ipynb
+│   │   ├── 05_despacho_ambulancias_filterstore.ipynb
+│   │   ├── README.md                  ← guia da trilha didática
+│   │   └── ex*.py                     ← versões script de apoio
+│   └── streamlit/
+│       └── app_gemeo_digital.py       ← painel interativo do gêmeo digital
+└── docs/
+    └── simpy.md                       ← base teórica de apoio à D10
 ```
 
 ---
@@ -188,14 +194,22 @@ limite_superior = Q3 + 1.5 * IQR
 ### Dependências
 
 ```bash
-pip install requests pandas numpy matplotlib seaborn scipy simpy ipykernel
+python3 -m venv .venv
+source .venv/bin/activate
+pip install requests pandas numpy matplotlib seaborn scipy simpy ipykernel jupyter
+```
+
+Dependências adicionais por material da D10:
+
+```bash
+pip install prophet pyomo highspy streamlit plotly
 ```
 
 Ou com conda:
 
 ```bash
 conda install requests pandas numpy matplotlib seaborn scipy
-pip install simpy ipykernel
+pip install simpy ipykernel jupyter prophet pyomo highspy streamlit plotly
 ```
 
 ### Executar o notebook
@@ -211,7 +225,11 @@ Execute as células em ordem, de cima para baixo. O tempo total de execução é
 
 ## Material D10 — SimPy em Jupyter
 
-A D10 agora está organizada em uma **trilha de notebooks didáticos** dentro de [D10/simpy_exemplos](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos>), pensada para apresentação em aula e progressão conceitual.
+A D10 está organizada em três blocos complementares:
+
+- a trilha didática em [D10/simpy_exemplos](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos>), pensada para apresentação em aula e progressão conceitual;
+- o notebook integrador em [D10/notebooks/D10_GemeDigital_PontaAPonta.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/notebooks/D10_GemeDigital_PontaAPonta.ipynb>), com o caso completo de gêmeo digital;
+- o painel em [D10/streamlit/app_gemeo_digital.py](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/streamlit/app_gemeo_digital.py>), para navegação interativa dos resultados.
 
 ### Ordem sugerida
 
@@ -243,6 +261,28 @@ jupyter notebook
 
 Depois, abra os notebooks na ordem sugerida. Os arquivos `.py` da mesma pasta ficam como **material de apoio**, úteis para execução rápida fora do Jupyter ou comparação entre versão script e versão notebook.
 
+### Notebook integrador da D10
+
+O notebook principal da aula final fica em [D10/notebooks](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/notebooks>) e expande a trilha didática com validação estatística, cenários, previsão e otimização.
+
+```bash
+cd "D10/notebooks"
+jupyter notebook D10_GemeDigital_PontaAPonta.ipynb
+```
+
+Para executar todas as seções sem adaptação, além de `simpy`, mantenha instalados `prophet`, `pyomo` e `highspy`.
+
+### Painel Streamlit da D10
+
+O painel interativo usa a mesma narrativa da aula final em formato de dashboard.
+
+```bash
+cd "D10/streamlit"
+../../.venv/bin/streamlit run app_gemeo_digital.py
+```
+
+O app inicia mesmo sem dados externos, usando um fallback sintético para demonstração quando o histórico não estiver disponível no caminho esperado pelo script.
+
 ---
 
 ## Tecnologias e Padrões
@@ -257,6 +297,7 @@ Depois, abra os notebooks na ordem sugerida. Os arquivos `.py` da mesma pasta fi
 | SciPy | ≥ 1.9 | Ajuste de distribuições (Lognormal) |
 | Matplotlib / Seaborn | latest | Visualizações (5 figuras) |
 | SimPy | 4.1.1 | Motor de simulação DES usado na trilha didática da D10 |
+| Pyomo + HiGHS | latest | Modelo prescritivo para seleção ótima de políticas de escala |
 | LGPD | Lei 13.709/2018 | Conformidade no tratamento de dados de saúde |
 | Protocolo Manchester | — | Sistema de triagem e classificação de risco |
 
@@ -291,10 +332,19 @@ mu_amarelo    = servico.loc[servico.risco_manchester == "Amarelo", "media_atend_
 sigma_amarelo = servico.loc[servico.risco_manchester == "Amarelo", "dp_atend_min"].values[0]
 ```
 
-Na prática didática, a D10 está dividida em dois níveis:
+Na prática didática, a D10 combina dois níveis principais de conteúdo e um artefato complementar:
 
 - a trilha [D10/simpy_exemplos](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/simpy_exemplos>) para ensinar os conceitos fundamentais do SimPy;
-- o notebook [D10_GemeDigital_PontaAPonta.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/D10_GemeDigital_PontaAPonta.ipynb>) para mostrar a integração ponta a ponta em um gêmeo digital mais completo.
+- o notebook [D10/notebooks/D10_GemeDigital_PontaAPonta.ipynb](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/notebooks/D10_GemeDigital_PontaAPonta.ipynb>) para mostrar a integração ponta a ponta em um gêmeo digital mais completo;
+- o painel [D10/streamlit/app_gemeo_digital.py](</Users/pedroeckel/gestao_quanti/projects/unimed sp/code/D10/streamlit/app_gemeo_digital.py>) para apresentação interativa dos resultados.
+
+No notebook principal da D10, o fluxo agora percorre cinco camadas de decisão:
+
+- calibração do gêmeo digital com dados do HIS/ERP;
+- simulação com validação estatística e atualização automática;
+- análise de cenários operacionais;
+- predição de demanda com Prophet para os próximos 14 dias;
+- otimização prescritiva da escala com `Pyomo + HiGHS`, escolhendo o menor reforço de médicos que atende às metas de espera.
 
 ---
 
