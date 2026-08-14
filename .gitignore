@@ -1,4 +1,24 @@
-.venv
+# Ambiente virtual
+.venv/
+
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+Icon?
+
+# Node / Next.js (F1/frontend)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Artefatos de treino (CatBoost)
+catboost_info/

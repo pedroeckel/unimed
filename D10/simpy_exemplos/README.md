@@ -1,6 +1,6 @@
 # Exemplos Didáticos de SimPy para a Aula D10
 
-Este material transforma os exemplos de [docs/simpy.md](/Users/pedroeckel/gestao_quanti/projects/unimed%20sp/code/docs/simpy.md) em **notebooks Jupyter didáticos**, pensados para aula passo a passo.
+Este material transforma os exemplos de [docs/simpy.md](../../docs/simpy.md) em **notebooks Jupyter didáticos**, pensados para aula passo a passo.
 
 ## Trilha principal da aula
 
