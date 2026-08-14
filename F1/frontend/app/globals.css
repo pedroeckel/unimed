@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Identidade visual.
+
+   As cores vêm dos tokens institucionais publicados no site da Unimed FESP
+   (`--cdm-*`): verde #00995d, verde escuro #004e4c, verde cítrico #b1d34b,
+   laranja #f47920, vermelho #ed1651, cinzas #f2f2f2 / #cccccc / #808080.
+   Os nomes abaixo são os papéis dentro do produto — trocar a marca é trocar
+   estes valores, e nada mais.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  --color-fundo: #f1f4f2;
+  --color-barra: #004e4c;
+  --color-barra2: #013b3a;
+  --color-painel: #ffffff;
+  --color-painel2: #f4f7f5;
+  --color-borda: #e2e8e4;
+  --color-borda2: #cbd5ce;
+
+  --color-texto: #172a26;
+  --color-suave: #4f6058;
+  --color-tenue: #7d8b84;
+
+  --color-verde: #00995d;
+  --color-verde2: #007a4a;
+  --color-citrico: #b1d34b;
+  --color-azul: #004e4c;
+  --color-azul2: #a4d8de;
+  --color-laranja: #f47920;
+  --color-vermelho: #ed1651;
+  --color-roxo: #a3238e;
+  --color-amarelo: #ffe596;
+
+  --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+body {
+  background: var(--color-fundo);
+  color: var(--color-texto);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@keyframes pulso {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.82); }
+}
+.pulso { animation: pulso 1.4s ease-in-out infinite; }
+
+@keyframes entrar {
+  from { opacity: 0; transform: translateX(-12px) scale(0.9); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+.entrar { animation: entrar 0.35s cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+@keyframes fluxo {
+  to { stroke-dashoffset: -12; }
+}
+.fluxo { animation: fluxo 0.8s linear infinite; }
+
+@keyframes surgir {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.surgir { animation: surgir 0.28s ease-out; }
+
+.numero {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Cartões do produto: sombra baixa, como painel impresso sobre a mesa. */
+.cartao {
+  box-shadow: 0 1px 2px rgba(23, 42, 38, 0.06), 0 1px 3px rgba(23, 42, 38, 0.04);
+}
+
+::selection {
+  background: var(--color-citrico);
+  color: #172a26;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-borda2);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover { background: #a9b8b0; }
